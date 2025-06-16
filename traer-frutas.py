@@ -1,6 +1,5 @@
 from icrawler.builtin import GoogleImageCrawler
 
-# Lista de frutas que queremos descargar
 frutas = ["manzana", "banana", "pera", "naranja", "uva"]
 
 for fruta in frutas:

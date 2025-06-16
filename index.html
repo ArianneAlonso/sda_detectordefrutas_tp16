@@ -1,21 +1,153 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <title>Clasificador de Frutas</title>
+  <meta charset="UTF-8" />
+  <title>Detector de Frutas con TensorFlow.js</title>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
   <style>
-    body { font-family: Arial; padding: 20px; }
-    #preview { max-width: 200px; margin-top: 10px; }
-    #resultado { font-weight: bold; margin-top: 15px; }
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 600px;
+      margin: 20px auto;
+      padding: 10px;
+      background-color: rgba(101, 4, 157, 0.496);
+    }
+    img {
+      max-width: 200px;
+      margin-top: 10px;
+    }
+    pre {
+      background-color: #f0f0f0;
+      padding: 10px;
+      height: 150px;
+      overflow-y: auto;
+      border: 1px solid #ccc;
+    }
   </style>
 </head>
 <body>
-  <h1>Clasificador de Frutas</h1>
-  <input type="file" id="imagen" accept="image/*"><br>
-  <img id="preview" /><br>
-  <p id="resultado">Subí una imagen para predecir</p>
+  <h2>Entrenar la Red Neuronal</h2>
+  <input type="file" id="uploadFiles" multiple webkitdirectory directory />
+  <button onclick="EntrenarModelo()">Iniciar Entrenamiento</button>
+  <pre id="logEntrenamiento"></pre>
 
-  <script src="clasificar.js"></script>
+  <h2>Clasificación de Imagen</h2>
+  <input type="file" id="inputImagen" accept="image/*" />
+  <br />
+  <img id="vistaPrevia" alt="Vista previa" />
+  <p id="resultadoClasificacion">Sube una imagen para clasificar</p>
+
+  <script>
+    let datos = [];
+    let redNeuronal;
+    const clases = ["manzana", "banana", "pera", "naranja", "uva"];
+
+    async function cargarImagenes(archivos) {
+      return new Promise((res) => {
+        let contProcesados = 0;
+
+        for (const archivo of archivos) {
+          const lectorArchivo = new FileReader();
+          lectorArchivo.onload = (event) => {
+            const imagen = new Image();
+            imagen.onload = () => {
+              const etiqueta = archivo.webkitRelativePath.split("/")[1];
+              datos.push({ imagen, etiqueta });
+
+              contProcesados++;
+              if (contProcesados === archivos.length) res();
+            };
+            imagen.src = event.target.result;
+          };
+          lectorArchivo.readAsDataURL(archivo);
+        }
+      });
+    }
+
+    async function EntrenarModelo() {
+      const archivos = document.getElementById("uploadFiles").files;
+      if (archivos.length === 0) {
+        alert("⚠️ No seleccionaste imágenes para entrenar.");
+        return;
+      }
+
+      datos = []; // Limpiar datos previos
+      await cargarImagenes(archivos);
+
+      const etiquetasUnicas = [...new Set(datos.map(d => d.etiqueta))];
+      const mapaEtiquetas = Object.fromEntries(etiquetasUnicas.map((e, i) => [e, i]));
+
+      const entradas = [];
+      const salidas = [];
+
+      datos.forEach(({ imagen, etiqueta }) => {
+        let tensorImagen = tf.browser.fromPixels(imagen).resizeNearestNeighbor([64, 64]).toFloat().div(255);
+        entradas.push(tensorImagen);
+        salidas.push(mapaEtiquetas[etiqueta]);
+      });
+
+      const entradaTensor = tf.stack(entradas);
+      const salidaTensor = tf.oneHot(tf.tensor1d(salidas, "int32"), etiquetasUnicas.length);
+
+      redNeuronal = tf.sequential();
+      redNeuronal.add(tf.layers.conv2d({
+        inputShape: [64, 64, 3],
+        filters: 20,
+        kernelSize: 3,
+        activation: "relu"
+      }));
+      redNeuronal.add(tf.layers.maxPooling2d({ poolSize: 2 }));
+      redNeuronal.add(tf.layers.flatten());
+      redNeuronal.add(tf.layers.dense({ units: 80, activation: "relu" }));
+      redNeuronal.add(tf.layers.dense({ units: etiquetasUnicas.length, activation: "softmax" }));
+
+      redNeuronal.compile({
+        optimizer: tf.train.adam(),
+        loss: "categoricalCrossentropy",
+        metrics: ["accuracy"]
+      });
+
+      document.getElementById("logEntrenamiento").textContent = "";
+
+      await redNeuronal.fit(entradaTensor, salidaTensor, {
+        epochs: 25,
+        callbacks: {
+          onEpochEnd: (epoca, logs) => {
+            document.getElementById("logEntrenamiento").textContent += `Época ${epoca + 1}: Precisión ${logs.acc.toFixed(4)}\n`;
+          }
+        }
+      });
+
+      await redNeuronal.save("indexeddb://modelo-frutas-nuevo");
+      alert("✅ Entrenamiento terminado y modelo guardado.");
+    }
+
+    async function cargarRed() {
+      try {
+        redNeuronal = await tf.loadLayersModel("indexeddb://modelo-frutas-nuevo");
+        document.getElementById("resultadoClasificacion").textContent = "✅ Modelo cargado correctamente.";
+      } catch {
+        document.getElementById("resultadoClasificacion").textContent = "❌ No se encontró modelo guardado.";
+      }
+    }
+    cargarRed();
+
+    document.getElementById("inputImagen").addEventListener("change", async (e) => {
+      const archivo = e.target.files[0];
+      if (!archivo || !redNeuronal) return;
+
+      const imagen = new Image();
+      imagen.src = URL.createObjectURL(archivo);
+      document.getElementById("vistaPrevia").src = imagen.src;
+
+      imagen.onload = async () => {
+        const tensor = tf.browser.fromPixels(imagen).resizeNearestNeighbor([64, 64]).toFloat().div(255).expandDims();
+        const prediccion = redNeuronal.predict(tensor);
+        const indice = (await prediccion.argMax(1).data())[0];
+        const probabilidad = (await prediccion.max().data())[0];
+        document.getElementById("resultadoClasificacion").textContent = `🔎 Detectado: ${clases[indice]} (${(probabilidad * 100).toFixed(2)}% seguro)`;
+      };
+    });
+  </script>
 </body>
 </html>
